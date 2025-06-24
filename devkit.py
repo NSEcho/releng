@@ -272,6 +272,16 @@ class CompilerApplication:
                 renames_file.flush()
                 subprocess.run(objcopy + ["--redefine-syms=" + renames_file.name, output_path],
                                check=True)
+
+            # workaround for i686 mingw
+            if any("i686-w64-mingw32-gcc" in item for item in meson_config["c"]):
+                internal_symbol_mappings = get_internal_symbol_mappings(output_path, meson_config)
+                renames = "\n".join([f"{original} {renamed}" for original, renamed in internal_symbol_mappings]) + "\n"
+                with tempfile.NamedTemporaryFile() as renames_file:
+                    renames_file.write(renames.encode("utf-8"))
+                    renames_file.flush()
+                    subprocess.run(objcopy + ["--redefine-syms=" + renames_file.name, output_path],
+                               check=True)
         else:
             thirdparty_symbol_mappings = []
 
@@ -357,10 +367,22 @@ def get_thirdparty_symbol_names(library, meson_config):
     visible_names.sort()
 
     frida_prefixes = ["frida", "_frida", "gum", "_gum"]
-    thirdparty_names = [name for name in visible_names if not any([name.startswith(prefix) for prefix in frida_prefixes])]
+    if any("i686-w64-mingw32-gcc" in item for item in meson_config["c"]):
+        thirdparty_names = [name.replace("_g_","g_") for name in visible_names if not any([name.startswith(prefix) for prefix in frida_prefixes])]
+    else:
+        thirdparty_names = [name for name in visible_names if not any([name.startswith(prefix) for prefix in frida_prefixes])]
 
     return thirdparty_names
 
+def get_internal_symbol_mappings(library, meson_config):
+    return [("_frida_" + name, name) for name in get_internal_symbol_names(library, meson_config)]
+
+def get_internal_symbol_names(library, meson_config):
+    visible_names = list(set([name for kind, name in get_symbols(library, meson_config) if kind in ("T", "D", "B", "R", "C")]))
+    visible_names.sort()
+
+    internal_names = [name for name in visible_names if "frida_" in name and "__" in name]
+    return internal_names
 
 def get_symbols(library, meson_config):
     result = []
